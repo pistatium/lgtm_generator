@@ -1,111 +1,103 @@
 package main
 
 import (
+	"fmt"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
-	"io/ioutil"
-	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/golang/freetype/truetype"
-	"golang.org/x/image/font"
-	"golang.org/x/image/math/fixed"
+	"github.com/fogleman/gg"
 )
 
-func main() {
-	// 画像を読み込む
-	file, err := os.Open("./assets/cat_run.png")
+const (
+	assetsFolder  = "assets"
+	outputsFolder = "outputs"
+)
+
+func processImages() error {
+	files, err := os.ReadDir(assetsFolder)
 	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	img, err := png.Decode(file)
-	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	// 画像の中央に LGTM の文字を描画する
-	const lgtmText = "LGTM"
-	textWidth := 800
-	textHeight := 300
-	textImg := image.NewRGBA(image.Rect(0, 0, textWidth, textHeight))
-	draw.Draw(textImg, textImg.Bounds(), &image.Uniform{color.RGBA{0, 0, 0, 0}}, image.Point{}, draw.Src)
-	drawString(textImg, lgtmText, 0, 0, color.White, "Sora-ExtraBold")
-	x := (img.Bounds().Max.X - textWidth) / 2
-	y := (img.Bounds().Max.Y - textHeight) / 2
-	draw.Draw(img.(draw.Image), image.Rect(x, y, x+textWidth, y+textHeight), textImg, image.Point{}, draw.Over)
-
-	// 出力する
-	out, err := os.Create("output.png")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer out.Close()
-
-	err = png.Encode(out, img)
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-func drawString(dst draw.Image, s string, x, y int, c color.Color, fontName string) {
-	f, err := loadFont(fontName)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// draw.DrawTextを使用してテキストを描画する
-	face := truetype.NewFace(f, &truetype.Options{
-		Size:    220,
-		DPI:     72,
-		Hinting: font.HintingFull,
-	})
-	d := &font.Drawer{
-		Dst:  dst,
-		Src:  image.NewUniform(c),
-		Face: face,
-	}
-	d.Dot = fixed.P(x, y+face.Metrics().Ascent.Ceil())
-
-	d.DrawString(s)
-}
-
-func loadFont(name string) (*truetype.Font, error) {
-	f, err := os.Open(filepath.Join("assets", "font", name+".ttf"))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	b, err := ioutil.ReadAll(f)
-	if err != nil {
-		return nil, err
-	}
-
-	return truetype.Parse(b)
-}
-
-func getAverageColor(img image.Image) color.RGBA {
-	var r, g, b, a uint32
-	var count uint32
-	for y := img.Bounds().Min.Y; y < img.Bounds().Max.Y; y++ {
-		for x := img.Bounds().Min.X; x < img.Bounds().Max.X; x++ {
-			c := color.RGBAModel.Convert(img.At(x, y)).(color.RGBA)
-			r += uint32(c.R)
-			g += uint32(c.G)
-			b += uint32(c.B)
-			a += uint32(c.A)
-			count++
+	for _, file := range files {
+		if !file.IsDir() && isImage(file.Name()) {
+			if err := processImage(file.Name()); err != nil {
+				return err
+			}
 		}
 	}
-	if count == 0 {
-		return color.RGBA{0, 0, 0, 255}
+
+	return nil
+}
+
+func isImage(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif"
+}
+
+func processImage(filename string) error {
+	inputPath := filepath.Join(assetsFolder, filename)
+	imgFile, err := os.Open(inputPath)
+	if err != nil {
+		return err
 	}
-	r /= count
-	g /= count
-	b /= count
-	a /= count
-	return color.RGBA{uint8(r), uint8(g), uint8(b), uint8(a)}
+	defer imgFile.Close()
+
+	img, _, err := image.Decode(imgFile)
+	if err != nil {
+		return err
+	}
+
+	out := image.NewRGBA(img.Bounds())
+	draw.Draw(out, out.Bounds(), img, image.Point{0, 0}, draw.Src)
+
+	// Initialize the graphics context
+	dc := gg.NewContextForRGBA(out)
+	width := float64(img.Bounds().Dx())
+	height := float64(img.Bounds().Dy())
+
+	// Set the font, size, and text color
+	if err := dc.LoadFontFace("./assets/font/Sora-ExtraBold.ttf", height/3); err != nil {
+		return err
+	}
+
+	// Draw the text shadow
+	sw, sh := dc.MeasureString("LGTM")
+	x := (width - sw) / 2
+	y := (height + sh*0) / 2
+
+	// Black for shadow
+	dc.SetRGBA(0.9, 0.9, 0.9, 0.5)
+	for dx := 0.0; dx <= 1.0; dx += 1 {
+		for dy := 0.0; dy <= 1.0; dy += 1 {
+			dc.DrawString("LGTM", x+dx, y+dy)
+		}
+	}
+	// white
+	dc.SetRGBA(1, 1, 1, 0.9)
+	dc.DrawString("LGTM", x, y)
+
+	outputPath := filepath.Join(outputsFolder, strings.TrimSuffix(filename, filepath.Ext(filename))+".png")
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+	defer outFile.Close()
+
+	if err := png.Encode(outFile, out); err != nil {
+		return err
+	}
+
+	fmt.Printf("Processed %s and saved to %s\n", inputPath, outputPath)
+	return nil
+}
+
+func main() {
+	if err := processImages(); err != nil {
+		fmt.Println("Error:", err)
+	}
 }
